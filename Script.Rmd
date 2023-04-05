@@ -1,0 +1,172 @@
+---
+title: Sequencing vs amplification for the estimation of allele dosages in sugarcane
+  (Saccharum spp.)
+author: "Hugo Jaimes, Alejandra Londoño, Carolina Saavedra-Diaz, Jhon Henry Trujillo-Montenegro,
+  Jershon López-Gerena, John J. Riascos, Fernando S. Aguilar"
+date: "2023-04-04"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#Libraries required
+list.of.packages <- c("openxlsx","tidyverse","data.table","fitPoly","gtools")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]                       
+if(length(new.packages)) {install.packages(new.packages)}
+
+invisible(lapply(list.of.packages, library, character.only = TRUE))      
+
+rm(list = ls())
+
+
+```
+
+# KASP Flurescence intensity
+The data input for this analysis corresponds to the output produced by the company Intertek for the KASP markers. Data is delivered by providing the fluorescence intensity for the reference allele (Y) and alternative allele (X).
+
+```{r cars}
+# Eliminate the hashtag to run
+
+#KASP =openxlsx::read.xlsx("D:/Fernando Silva/OneDrive - CENICANA/Documentos/Articulos/KASP_ddPCR_TR/03.Intertek_2021/KASP Analisis/FitPoly/02.Abr2023/Datos/github/KASP_Intertek.xlsx")
+
+#KASP<- KASP[,c("MarkerName","SampleName","ratio")]
+
+```
+
+## Allele dosage estimation
+The allele dosage will be estimated using the function **fitOneMarker** from **fitPoly** package. The estimation is done by marker with the following for loop:
+
+```{r}
+# Eliminate the hashtag to run
+#nm= gtools::mixedsort(unique(d$MarkerName)) # Unique markers
+#pred=NULL # Empty data frame
+#for (i in 1:length(nm)) {
+#x=fitOneMarker(ploidy=10, marker=nm[i],data=d) # Fit the model
+#z=x$scores # Estimate the dosage
+#pred=rbind(pred,z) # Fill the data frame
+#}
+
+#fwrite(subset(pred, !is.na(pred$marker)), "KASP_Dosis_Predicha_FitPoly_221_Genotypes_y_185_SNPs.csv",quote = F, sep = ",")
+#rm(list = ls())
+```
+
+# Allele dosage for KASP and GBS+RADSeq
+Onde the allele dosage was estimated for the KASP markers, a step to correlate both dosages is required:
+
+```{r}
+GBS = fread("Dosage_GBS_RADSeq_179_SNP_220_Genotypes.csv", data.table = F)
+
+KASP = fread("KASP_Dosis_Predicha_FitPoly_221_Genotypes_y_185_SNPs.csv", data.table = F) #Importing data
+KASP = KASP[,c("MarkerName","SampleName","maxgeno")] # Keeping columns of interest
+colnames(KASP)[grep("maxgeno", colnames(KASP))] <- "Dosis_KASP_Entera" # Renamiung dosage column
+KASP$Dosis_KASP <- KASP$Dosis_KASP_Entera/10 # Estimating dosage in a [0,1] format
+
+Dosage = left_join(KASP, GBS, by = c("MarkerName", "SampleName")) 
+
+Dosage = subset(Dosage, !Dosage$Dosis_GBS %in% c(NA, -1) & !is.na(Dosis_KASP))
+```
+
+## Correlating KASP and GBS+RADSeq
+The correlation will be done with three statisticss Pearson, Spearman, and Kendall. 
+```{r, warning=FALSE}
+nm = unique(Dosage$MarkerName)
+
+asd <- data.frame(MarkerName = character(), Dosis_Kasp = numeric(), Dosis_GBS = numeric())
+for (i in 1:length(nm)) {
+  d1 <- subset(Dosage, MarkerName == nm[i])
+  asd[i, "MarkerName"] <- nm[i]
+  asd[i, "Dosis_Kasp"] <- length(unique(d1$Dosis_KASP))
+  asd[i, "Dosis_GBS"] <- length(unique(d1$Dosis_GBS))
+  rm(d1)
+}
+
+d3 <- subset(Dosage, Dosage$MarkerName %in% asd$MarkerName[asd$Dosis_Kasp > 1])
+cat(paste0("There are ", sum(asd$Dosis_Kasp == 1), " SNPs that are Monomorphic for the sugarcane population analyzed"))
+
+mono <- data.frame(SNP = as.character(asd[asd$Dosis_Kasp == 1,1]),RefMin = NA, RefMax = NA, r = NA, t = NA, df = NA,N = NA, P= NA)
+
+pred = data.frame(SNP = character(), RefMin = numeric(), RefMax = numeric(), r = numeric(), t = numeric(),df = numeric(),N = numeric(), P= numeric())
+
+nm <- unique(d3$MarkerName)
+for (i in 1:length(nm)) {
+  asd = subset(d3, d3$MarkerName == nm[i])
+  pred[i, "SNP"] = nm[i]
+  pred[i, "RefMin"] = 10*min(asd$Dosis_KASP, na.rm = T)
+  pred[i, "RefMax"] = 10*max(asd$Dosis_KASP, na.rm = T)
+  b=cor.test(asd$Dosis_KASP, asd$Dosis_GBS, 
+             method = "pearson")
+  
+  pred[i, "r"] = b$estimate
+  pred[i, "N"] = nrow(asd)
+  pred[i, "P"] = b$p.value
+  pred[i, "t"] = b$statistic
+  pred[i, "df"] = b$parameter
+}
+pred <- rbind(pred, mono)
+pred1 <- rbind(pred, data.frame(SNP = "Media", RefMin = NA, RefMax = NA,r = mean(pred$r, na.rm = T), t = NA, df = NA,N = mean(pred$N, na.rm = T), P = NA),data.frame(SNP = "SD",RefMin = NA, RefMax = NA, r = sd(pred$r, na.rm = T), t = NA, df = NA,N = sd(pred$N, na.rm = T), P= NA),data.frame(SNP = "Min",RefMin = NA, RefMax = NA, r = min(pred$r, na.rm = T), t = NA, df = NA,N = min(pred$N, na.rm = T), P= NA),data.frame(SNP = "Max",RefMin = NA, RefMax = NA, r = max(pred$r, na.rm = T), t = NA, df = NA,N = max(pred$N, na.rm = T), P= NA))
+
+
+openxlsx::write.xlsx(pred1,"Correlaciones_pearson_spearman_Kendall_GBS_RADSeq_vs_KASP_FitPoly.xlsx")
+rm(list = ls())
+```
+
+## Correlating Flex-Seq and GBS+RADSeq
+
+```{r, warning=FALSE}
+
+TR1 = read.xlsx("Dosage_FlexSeq_81_SNPs_64_Genotypes.xlsx")
+GBS_TR = fread("Dosage_GBS_RADSeq_179_SNP_220_Genotypes.csv")
+
+TR1 = subset(TR1, TR1$SampleName %in% GBS_TR$SampleName)
+TR1 = subset(TR1, TR1$MarkerName %in% GBS_TR$MarkerName)
+
+GBS_TR = subset(GBS_TR, GBS_TR$SampleName %in% TR1$SampleName)
+GBS_TR = subset(GBS_TR, GBS_TR$MarkerName %in% TR1$MarkerName)
+
+TR3 = left_join(TR1, GBS_TR)
+
+TR4 = subset(TR3, !TR3$Dosis_GBS %in% c(NA,-1))
+rm(list = ls()[ls() %in% c("TR3","TR1","GBS_TR")])
+
+nm1 = unique(TR4$MarkerName)
+# Identify monomorphic markers
+asd <- data.frame(MarkerName = character(), Dosis_Flex = numeric(), Dosis_GBS = numeric())
+for (i in 1:length(nm1)) {
+  d1 <- subset(TR4, MarkerName == nm1[i])
+  asd[i, "MarkerName"] <- nm1[i]
+  asd[i, "Dosis_Flex"] <- length(unique(d1$Dosis_TR))
+  asd[i, "Dosis_GBS"] <- length(unique(d1$Dosis_GBS))
+  rm(d1)
+}
+
+d3 <- subset(TR4, MarkerName %in% asd$MarkerName[asd$Dosis_Flex > 1])
+cat(paste0("There are ", sum(asd$Dosis_Flex == 1), " SNPs that are Monomorphic for the sugarcane population analyzed"))
+
+mono <- data.frame(SNP = as.character(asd[asd$Dosis_Flex == 1,1]),RefMin = NA, RefMax = NA, r = NA, t = NA, df = NA,N = NA, P= NA)
+
+pred = data.frame(SNP = character(), RefMin = numeric(), RefMax = numeric(), r = numeric(), t = numeric(),df = numeric(),N = numeric(), P= numeric())
+nm <- unique(d3$MarkerName)
+for (i in 1:length(nm)) {
+  asd = subset(d3, d3$MarkerName == nm[i])
+  pred[i, "SNP"] = nm[i]
+  pred[i, "RefMin"] = 10*min(asd$Dosis_TR, na.rm = T)
+  pred[i, "RefMax"] = 10*max(asd$Dosis_TR, na.rm = T)
+  b=cor.test(asd$Dosis_TR, asd$Dosis_GBS, 
+             method = "pearson")
+  
+  pred[i, "r"] = b$estimate
+  pred[i, "N"] = nrow(asd)
+  pred[i, "P"] = b$p.value
+  pred[i, "t"] = b$statistic
+  pred[i, "df"] = b$parameter
+}
+pred <- rbind(pred, mono)
+pred1 <- rbind(pred, data.frame(SNP = "Media", RefMin = NA, RefMax = NA,r = mean(pred$r, na.rm = T), t = NA, df = NA,N = mean(pred$N, na.rm = T), P = NA),data.frame(SNP = "SD",RefMin = NA, RefMax = NA, r = sd(pred$r, na.rm = T), t = NA, df = NA,N = sd(pred$N, na.rm = T), P= NA),data.frame(SNP = "Min",RefMin = NA, RefMax = NA, r = min(pred$r, na.rm = T), t = NA, df = NA,N = min(pred$N, na.rm = T), P= NA),data.frame(SNP = "Max",RefMin = NA, RefMax = NA, r = max(pred$r, na.rm = T), t = NA, df = NA,N = max(pred$N, na.rm = T), P= NA))
+
+
+#write.xlsx(pred1, "Correlaciones_pearson_spearman_Kendall_GBS_RADSeq_vs_FlexSeq.xlsx")
+rm(list = ls())
+```
+
