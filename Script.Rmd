@@ -1,17 +1,20 @@
 ---
-title: Sequencing vs amplification for the estimation of allele dosages in sugarcane
-  (Saccharum spp.)
-author: "Hugo Jaimes, Alejandra Londoño, Carolina Saavedra-Diaz, Jhon Henry Trujillo-Montenegro,
-  Jershon López-Gerena, John J. Riascos, Fernando S. Aguilar"
-date: "2023-04-04"
-output:
-  word_document: default
-  pdf_document: default
+title: "Script Allele dosage in Sugarcane"
+author: "Fernando S Aguilar"
+date: "2023-11-21"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-#Libraries required
+```
+
+#Libraries
+Loading required libraries for the analysis
+
+```{r}
 list.of.packages <- c("openxlsx","tidyverse","data.table","fitPoly","gtools")
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]                       
 if(length(new.packages)) {install.packages(new.packages)}
@@ -20,153 +23,168 @@ invisible(lapply(list.of.packages, library, character.only = TRUE))
 
 rm(list = ls())
 
-
 ```
 
-# KASP Flurescence intensity
-The data input for this analysis corresponds to the output produced by the company Intertek for the KASP markers. Data is delivered by providing the fluorescence intensity for the reference allele (Y) and alternative allele (X).
+# Uploading data
+Uploading fluorescence ratios for KASP, Allele dosage for Flex-Seq, and GBS+RADSeq
+```{r}
+# KASP
+d=openxlsx::read.xlsx("KASP_Intertek_FluorescenceRatios_185_SNPs_485_Sugarcane_Varieties.xlsx")
+d1 <- d[,c("MarkerName","SampleName","ratio")]
 
-```{r cars}
-# Eliminate the hashtag to run
+#Flex-Seq
+TR = fread("Flex_Seq_Allele_dosage_76_SNPs_53_Genotypes.csv", data.table = F)
 
-#KASP =openxlsx::read.xlsx("D:/Fernando Silva/OneDrive - CENICANA/Documentos/Articulos/KASP_ddPCR_TR/03.Intertek_2021/KASP Analisis/FitPoly/02.Abr2023/Datos/github/KASP_Intertek.xlsx")
-
-#KASP<- KASP[,c("MarkerName","SampleName","ratio")]
-
+## GBS+RADSeq
+GBRA = fread("GBS_RADSeq_Allele_Dosage_76_SNPs_in_53_sugarcane_varieties_in_Cenicana.csv", data.table = F)
 ```
 
-## Allele dosage estimation
-The allele dosage will be estimated using the function **fitOneMarker** from **fitPoly** package. The estimation is done by marker with the following for loop:
+#Converting SNPs to KASP
+The fluorescence ratios obtained with the KASP technology were converted to a decaploid organism by fitting mixture models, with fitPoly package, to the distribution of fluorescence intensity ratios.
 
 ```{r}
-# Eliminate the hashtag to run
-#nm= gtools::mixedsort(unique(d$MarkerName)) # Unique markers
-#pred=NULL # Empty data frame
-#for (i in 1:length(nm)) {
-#x=fitOneMarker(ploidy=10, marker=nm[i],data=d) # Fit the model
-#z=x$scores # Estimate the dosage
-#pred=rbind(pred,z) # Fill the data frame
-#}
+#Do not run. It takes long time to solve the mixture models. Instead load the file after this prediction.
 
-#fwrite(subset(pred, !is.na(pred$marker)), "KASP_Dosis_Predicha_FitPoly_221_Genotypes_y_185_SNPs.csv",quote = F, sep = ",")
-#rm(list = ls())
+# nm= gtools::mixedsort(unique(d1$MarkerName))
+# pred=NULL
+# for (i in 1:length(nm)) {
+#   x=fitOneMarker(ploidy=10, marker=nm[i],data=d)
+#   z=x$scores
+#   pred=rbind(pred,z)
+#   
+# }
+
+## Loading the results from the mixture models
+pred = read.xlsx("Prediction_Fitpoly_KASP_117_de_185_Markers_KASP_483_Individuos.xlsx")
+pred = subset(pred, SampleName %in% TR$Genotype)
+pred = subset(pred, MarkerName %in% TR$MarkerName)
+pred = pred[,c("MarkerName", "SampleName", "maxgeno")]
+pred$maxgeno = pred$maxgeno/10
+colnames(pred)[2:3] <- c("Genotype","KASP")
 ```
+Results: Out of the 76 SNP markers, only 42 were succesfully converted to KASP with the fluorescence ratios.
 
-# Allele dosage for KASP and GBS+RADSeq
-Onde the allele dosage was estimated for the KASP markers, a step to correlate both dosages is required:
-
+# Correlation between techniques
 ```{r}
-GBS = fread("Dosage_GBS_RADSeq_179_SNP_220_Genotypes.csv", data.table = F)
+Flex_GBSRADSeq = left_join(TR, GBRA ) 
 
-KASP = fread("KASP_Dosis_Predicha_FitPoly_221_Genotypes_y_185_SNPs.csv", data.table = F) #Importing data
-KASP = KASP[,c("MarkerName","SampleName","maxgeno")] # Keeping columns of interest
-colnames(KASP)[grep("maxgeno", colnames(KASP))] <- "Dosis_KASP_Entera" # Renamiung dosage column
-KASP$Dosis_KASP <- KASP$Dosis_KASP_Entera/10 # Estimating dosage in a [0,1] format
+df_FGR <- Flex_GBSRADSeq %>%
+  group_by(MarkerName)%>%
+  summarize(r_Flex_GBSRADSeq = cor.test(GBS_RADSeq, Flex_Seq, method = "pearson", na.action = "na.exclude")$estimate,
+            
+            pval_Flex_GBSRADSeq= cor.test(GBS_RADSeq, Flex_Seq, method = "pearson", na.action = "na.exclude")$p.value,
+            
+            df_Flex_GBSRADSeq = 
+            cor.test(GBS_RADSeq, Flex_Seq, method = "pearson", na.action = "na.exclude")$parameter,
+            
+            t_Flex_GBSRADSeq = 
+            cor.test(GBS_RADSeq, Flex_Seq, method = "pearson", na.action = "na.exclude")$statistic)
 
-Dosage = left_join(KASP, GBS, by = c("MarkerName", "SampleName")) 
 
-Dosage = subset(Dosage, !Dosage$Dosis_GBS %in% c(NA, -1) & !is.na(Dosis_KASP))
+Flex_KASP = left_join(pred, TR)
+
+df_FK <- Flex_KASP %>%
+  group_by(MarkerName)%>%
+  summarize(r_Flex_KASP = cor.test(KASP, Flex_Seq, method = "pearson", na.action = "na.exclude")$estimate,
+            
+            pval_Flex_KASP = cor.test(KASP, Flex_Seq, method = "pearson", na.action = "na.exclude")$p.value,
+            
+            df_Flex_KASP = 
+            cor.test(KASP, Flex_Seq, method = "pearson", na.action = "na.exclude")$parameter,
+            
+            t_Flex_KASP = 
+            cor.test(KASP, Flex_Seq, method = "pearson", na.action = "na.exclude")$statistic)
+
+
+GBSRADSeq_KASP = left_join(pred, GBRA)
+
+df_KGR <- GBSRADSeq_KASP %>%
+   group_by(MarkerName)%>%
+  summarize(r_GBSRADSeq_KASP = cor.test(KASP, GBS_RADSeq, method = "pearson", na.action = "na.exclude")$estimate,
+            pval_GBSRADSeq_KASP = cor.test(KASP, GBS_RADSeq, method = "pearson", na.action = "na.exclude")$p.value,
+            pval_GBSRADSeq_KASP = cor.test(KASP, GBS_RADSeq, method = "pearson", na.action = "na.exclude")$p.value,
+            df_GBSRADSeq_KASP = 
+            cor.test(KASP, GBS_RADSeq, method = "pearson", na.action = "na.exclude")$parameter,
+            t_GBSRADSeq_KASP = 
+            cor.test(KASP, GBS_RADSeq, method = "pearson", na.action = "na.exclude")$statistic)
+
+r_all = left_join(df_FGR, df_KGR) %>% left_join(df_FK)
+
 ```
 
-## Correlating KASP and GBS+RADSeq
-The correlation will be done with three statisticss Pearson, Spearman, and Kendall. 
-```{r, warning=FALSE}
-nm = unique(Dosage$MarkerName)
+#Heatmap
+Creating a heatmap for the correlations obtained between Flex-Seq vs GBS+RADSeq, KASP vs GBS+RADSeq, and KASP vs Flex-Seq
+```{r}
+df_gbs_flx_kasp <- as.data.frame(r_all)
+head(df_gbs_flx_kasp)
+df_gbs_flx_kasp_1 <- as.matrix(df_gbs_flx_kasp[,c("MarkerName","r_Flex_GBSRADSeq","r_Flex_KASP","r_GBSRADSeq_KASP")] %>% remove_rownames() %>% column_to_rownames("MarkerName"))
+str(df_gbs_flx_kasp_1)
 
-asd <- data.frame(MarkerName = character(), Dosis_Kasp = numeric(), Dosis_GBS = numeric())
-for (i in 1:length(nm)) {
-  d1 <- subset(Dosage, MarkerName == nm[i])
-  asd[i, "MarkerName"] <- nm[i]
-  asd[i, "Dosis_Kasp"] <- length(unique(d1$Dosis_KASP))
-  asd[i, "Dosis_GBS"] <- length(unique(d1$Dosis_GBS))
-  rm(d1)
-}
+library(pheatmap)
 
-d3 <- subset(Dosage, Dosage$MarkerName %in% asd$MarkerName[asd$Dosis_Kasp > 1])
-cat(paste0("There are ", sum(asd$Dosis_Kasp == 1), " SNPs that are Monomorphic for the sugarcane population analyzed"))
+qer = df_gbs_flx_kasp_1
 
-mono <- data.frame(SNP = as.character(asd[asd$Dosis_Kasp == 1,1]),RefMin = NA, RefMax = NA, r = NA, t = NA, df = NA,N = NA, P= NA)
+qer[abs(qer) >= 0.8] <- 1
+qer[abs(qer) >= 0.5 & abs(qer) < 0.8] <- 0.75
+## Flex-Seq vs GBS+RADSeq
+qer[abs(qer[,"r_Flex_GBSRADSeq"]) > 0.22 & abs(qer[,"r_Flex_GBSRADSeq"]) < 0.5, "r_Flex_GBSRADSeq"] <- 0.5
+qer[abs(qer[,"r_Flex_GBSRADSeq"]) <= 0.22, "r_Flex_GBSRADSeq"] <- 0.25
+## KASP vs GBS+RADSeq
+qer[abs(qer[,"r_GBSRADSeq_KASP"]) >= 0.276 & abs(qer[,"r_GBSRADSeq_KASP"]) < 0.5,"r_GBSRADSeq_KASP"] <- 0.5
+qer[abs(qer[,"r_GBSRADSeq_KASP"]) <= 0.275,"r_GBSRADSeq_KASP"] <- 0.25
+## Flex-Seq vs KASP
+qer[abs(qer[,"r_Flex_KASP"]) > 0.23 & abs(qer[,"r_Flex_KASP"]) < 0.5,"r_Flex_KASP"] <- 0.5
+qer[abs(qer[,"r_Flex_KASP"]) <= 0.23,"r_Flex_KASP"] <- 0.25
+## Handling NAs
+qer[is.na(qer) ] <- 0
 
-pred = data.frame(SNP = character(), RefMin = numeric(), RefMax = numeric(), r = numeric(), t = numeric(),df = numeric(),N = numeric(), P= numeric())
+colnames(qer) <- c("Flex-Seq vs GBS+RADSeq","Flex-Seq vs KASP","KASP vs GBS+RADSeq")
+qer = qer[,c(1,3,2)]
 
-nm <- unique(d3$MarkerName)
-for (i in 1:length(nm)) {
-  asd = subset(d3, d3$MarkerName == nm[i])
-  pred[i, "SNP"] = nm[i]
-  pred[i, "RefMin"] = 10*min(asd$Dosis_KASP, na.rm = T)
-  pred[i, "RefMax"] = 10*max(asd$Dosis_KASP, na.rm = T)
-  b=cor.test(asd$Dosis_KASP, asd$Dosis_GBS, 
-             method = "pearson")
-  
-  pred[i, "r"] = b$estimate
-  pred[i, "N"] = nrow(asd)
-  pred[i, "P"] = b$p.value
-  pred[i, "t"] = b$statistic
-  pred[i, "df"] = b$parameter
-}
-pred <- rbind(pred, mono)
-pred1 <- rbind(pred, data.frame(SNP = "Media", RefMin = NA, RefMax = NA,r = mean(pred$r, na.rm = T), t = NA, df = NA,N = mean(pred$N, na.rm = T), P = NA),data.frame(SNP = "SD",RefMin = NA, RefMax = NA, r = sd(pred$r, na.rm = T), t = NA, df = NA,N = sd(pred$N, na.rm = T), P= NA),data.frame(SNP = "Min",RefMin = NA, RefMax = NA, r = min(pred$r, na.rm = T), t = NA, df = NA,N = min(pred$N, na.rm = T), P= NA),data.frame(SNP = "Max",RefMin = NA, RefMax = NA, r = max(pred$r, na.rm = T), t = NA, df = NA,N = max(pred$N, na.rm = T), P= NA))
+tiff(filename = "Heatmap_Correlations.tiff", width = 5, height = 10, units = "in", res = 1200)
+pheatmap(qer,cluster_rows=FALSE, cluster_cols=FALSE,
+   #color=c("grey","green","skyblue","lightblue","red"), 
+   legend=T,
+   # color = hcl.colors(5, "Oslo"),
+   color = c("aliceblue","lightskyblue","steelblue3","dodgerblue3","navy"),
+   legend_breaks = c(0.9,0.7,.5,0.3,.1), 
+   legend_labels = c("High","Moderate to high","Weak","Non-significant","Missing"), 
+   display_numbers = F,
+   cellheight = 8, 
+   cellwidth = 48, 
+   border_color = NA, 
+   fontsize = 8,
+   angle_col = 315, 
+   gaps_col = c(1,2),
+   # gaps_row = seq(1,76)
+   )
 
-
-openxlsx::write.xlsx(pred1,"Correlaciones_pearson_spearman_Kendall_GBS_RADSeq_vs_KASP_FitPoly.xlsx")
-rm(list = ls())
-```
-
-## Correlating Flex-Seq and GBS+RADSeq
-
-```{r, warning=FALSE}
-
-TR1 = read.xlsx("Dosage_FlexSeq_81_SNPs_64_Genotypes.xlsx")
-GBS_TR = fread("Dosage_GBS_RADSeq_179_SNP_220_Genotypes.csv")
-
-TR1 = subset(TR1, TR1$SampleName %in% GBS_TR$SampleName)
-TR1 = subset(TR1, TR1$MarkerName %in% GBS_TR$MarkerName)
-
-GBS_TR = subset(GBS_TR, GBS_TR$SampleName %in% TR1$SampleName)
-GBS_TR = subset(GBS_TR, GBS_TR$MarkerName %in% TR1$MarkerName)
-
-TR3 = left_join(TR1, GBS_TR)
-
-TR4 = subset(TR3, !TR3$Dosis_GBS %in% c(NA,-1))
-rm(list = ls()[ls() %in% c("TR3","TR1","GBS_TR")])
-
-nm1 = unique(TR4$MarkerName)
-# Identify monomorphic markers
-asd <- data.frame(MarkerName = character(), Dosis_Flex = numeric(), Dosis_GBS = numeric())
-for (i in 1:length(nm1)) {
-  d1 <- subset(TR4, MarkerName == nm1[i])
-  asd[i, "MarkerName"] <- nm1[i]
-  asd[i, "Dosis_Flex"] <- length(unique(d1$Dosis_TR))
-  asd[i, "Dosis_GBS"] <- length(unique(d1$Dosis_GBS))
-  rm(d1)
-}
-
-d3 <- subset(TR4, MarkerName %in% asd$MarkerName[asd$Dosis_Flex > 1])
-cat(paste0("There are ", sum(asd$Dosis_Flex == 1), " SNPs that are Monomorphic for the sugarcane population analyzed"))
-
-mono <- data.frame(SNP = as.character(asd[asd$Dosis_Flex == 1,1]),RefMin = NA, RefMax = NA, r = NA, t = NA, df = NA,N = NA, P= NA)
-
-pred = data.frame(SNP = character(), RefMin = numeric(), RefMax = numeric(), r = numeric(), t = numeric(),df = numeric(),N = numeric(), P= numeric())
-nm <- unique(d3$MarkerName)
-for (i in 1:length(nm)) {
-  asd = subset(d3, d3$MarkerName == nm[i])
-  pred[i, "SNP"] = nm[i]
-  pred[i, "RefMin"] = 10*min(asd$Dosis_TR, na.rm = T)
-  pred[i, "RefMax"] = 10*max(asd$Dosis_TR, na.rm = T)
-  b=cor.test(asd$Dosis_TR, asd$Dosis_GBS, 
-             method = "pearson")
-  
-  pred[i, "r"] = b$estimate
-  pred[i, "N"] = nrow(asd)
-  pred[i, "P"] = b$p.value
-  pred[i, "t"] = b$statistic
-  pred[i, "df"] = b$parameter
-}
-pred <- rbind(pred, mono)
-pred1 <- rbind(pred, data.frame(SNP = "Media", RefMin = NA, RefMax = NA,r = mean(pred$r, na.rm = T), t = NA, df = NA,N = mean(pred$N, na.rm = T), P = NA),data.frame(SNP = "SD",RefMin = NA, RefMax = NA, r = sd(pred$r, na.rm = T), t = NA, df = NA,N = sd(pred$N, na.rm = T), P= NA),data.frame(SNP = "Min",RefMin = NA, RefMax = NA, r = min(pred$r, na.rm = T), t = NA, df = NA,N = min(pred$N, na.rm = T), P= NA),data.frame(SNP = "Max",RefMin = NA, RefMax = NA, r = max(pred$r, na.rm = T), t = NA, df = NA,N = max(pred$N, na.rm = T), P= NA))
+dev.off()
 
 
-#write.xlsx(pred1, "Correlaciones_pearson_spearman_Kendall_GBS_RADSeq_vs_FlexSeq.xlsx")
-rm(list = ls())
+## Transposed
+tiff(filename = "Figure_2.tiff", width = 11.5, height = 3, units = "in", res = 1200)
+pheatmap(t(qer),cluster_rows=FALSE, cluster_cols=FALSE,
+   #color=c("grey","green","skyblue","lightblue","red"), 
+   legend=T,
+   # color = hcl.colors(5, "Oslo"),
+   color = c("aliceblue","lightskyblue","steelblue3","dodgerblue3","navy"),
+   legend_breaks = c(0.9,0.7,.5,0.3,.1), 
+   legend_labels = c("High","Moderate to high","Weak","Non-significant","Missing"), 
+   # legend_labels = c(paste0("High\n", "(r >|0.80|)"),paste0("Moderate to high\n","(|0.50| < r < |0.80|)"),paste0("Weak\n","(|0.23| < r < |0.50|)"),paste0("Non-significant\n","(r < |0.23|)"),"Missing"),
+   display_numbers = F,
+   cellheight = 48, 
+   cellwidth = 8, 
+   border_color = NA, 
+   fontsize = 8,
+   angle_col = 90, 
+   # gaps_col = c(1,2),
+    gaps_row = seq(1,2)
+   )
+
+dev.off()
+
+
+
 ```
 
